@@ -3,9 +3,10 @@ import {auth} from './auth/resource';
 import {data} from './data/resource';
 import {AuthorizationType, LambdaIntegration, LambdaRestApi} from "aws-cdk-lib/aws-apigateway";
 import {testFunction} from "@/amplify/functions/test-function/resource";
-import {DynamoEventSource} from "aws-cdk-lib/aws-lambda-event-sources";
-import {StartingPosition} from "aws-cdk-lib/aws-lambda";
+import {EventSourceMapping, StartingPosition} from "aws-cdk-lib/aws-lambda";
 import {tableEventListenerFunction} from "@/amplify/functions/table-event-listener-function/resource";
+import {Stack} from "aws-cdk-lib";
+import {Effect, Policy, PolicyStatement} from "aws-cdk-lib/aws-iam";
 
 const backend = defineBackend({
     tableEventListenerFunction,
@@ -28,7 +29,34 @@ api.root.addResource('test').addMethod('POST', testFunctionIntegration, {
     authorizationType: AuthorizationType.NONE,
 })
 
-const eventSource = new DynamoEventSource(backend.data.resources.tables["Todo"], {
-    startingPosition: StartingPosition.LATEST,
-});
-backend.tableEventListenerFunction.resources.lambda.addEventSource(eventSource);
+const todoTable = backend.data.resources.tables["Todo"]
+backend.tableEventListenerFunction.resources.lambda.role?.attachInlinePolicy(
+    new Policy(
+        Stack.of(todoTable),
+        "DynamoDBPolicy",
+        {
+            statements: [
+                new PolicyStatement({
+                    effect: Effect.ALLOW,
+                    actions: [
+                        "dynamodb:DescribeStream",
+                        "dynamodb:GetRecords",
+                        "dynamodb:GetShardIterator",
+                        "dynamodb:ListStreams",
+                    ],
+                    resources: ["*"],
+                }),
+            ],
+        }
+    )
+);
+
+new EventSourceMapping(
+    Stack.of(todoTable),
+    "test",
+    {
+        target: backend.tableEventListenerFunction.resources.lambda,
+        eventSourceArn: todoTable.tableStreamArn,
+        startingPosition: StartingPosition.LATEST,
+    }
+);
